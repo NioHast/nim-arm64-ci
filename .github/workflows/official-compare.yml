@@ -98,7 +98,8 @@ jobs:
           done
           curl -sf http://127.0.0.1:3000/health >/dev/null
           set +e
-          prlimit --nofile=200000:200000 taskset -c ${{ matrix.loadgen_cpus }} \
+          ulimit -n 200000 2>/dev/null || true
+          taskset -c ${{ matrix.loadgen_cpus }} \
             /tmp/loadgen -H 127.0.0.1 -p 3000 \
             -c 64000 -d 360 -t 9000 -m mixed \
             -T "$PWD/seed/tokens.json" | tee /tmp/hold.log
@@ -134,7 +135,8 @@ jobs:
           done
           curl -sf http://127.0.0.1:3000/health >/dev/null
           set +e
-          prlimit --nofile=200000:200000 taskset -c ${{ matrix.loadgen_cpus }} \
+          ulimit -n 200000 2>/dev/null || true
+          taskset -c ${{ matrix.loadgen_cpus }} \
             /tmp/loadgen -H 127.0.0.1 -p 3000 \
             -c 64 -d 30 -t 0 -m mixed \
             -T "$PWD/seed/tokens.json" | tee /tmp/sat.log
