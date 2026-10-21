@@ -1,0 +1,57 @@
+name: ARM64 benchmark
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - name: Check out submission branch
+        uses: actions/checkout@v4
+        with:
+          repository: NioHast/twelve-dollar-server-challenge
+          ref: arm64-port
+          path: repo
+      - name: Host architecture
+        run: uname -a
+      - name: Install tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3 jq curl openssl
+      - name: Install Nim
+        run: sudo bash repo/submissions/nim-io_uring-NioHast/install.sh
+      - name: Generate seed database and build
+        run: |
+          bash seed/make-seed.sh
+          bash submissions/nim-io_uring-NioHast/build.sh
+        working-directory: repo
+      - name: Install k6
+        run: |
+          curl -fsSL -o /tmp/k6.tgz https://github.com/grafana/k6/releases/download/v2.3.0/k6-v2.3.0-linux-arm64.tar.gz
+          tar -xzf /tmp/k6.tgz -C /tmp
+          sudo install /tmp/k6-v2.3.0-linux-arm64/k6 /usr/local/bin/k6
+      - name: Run 64-VU mixed workload on one server CPU
+        run: |
+          set -euo pipefail
+          cp seed/feed.db /tmp/bench.db
+          rm -f /tmp/bench.db-wal /tmp/bench.db-shm
+          prlimit --nofile=65535:65535 taskset -c 0 env \
+            SQLITE_PATH=/tmp/bench.db JWT_SECRET=twelve-dollar-challenge \
+            HOST=127.0.0.1 PORT=3000 IOURING_BUFS=256 ZEROCOPY_STATS=0 \
+            submissions/nim-io_uring-NioHast/bin/server >/tmp/server.log 2>&1 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true' EXIT
+          for _ in $(seq 60); do
+            curl -sf http://127.0.0.1:3000/health >/dev/null && break
+            sleep 1
+          done
+          taskset -c 1-3 k6 run --summary-export /tmp/summary.json \
+            -e BASE_URL=http://127.0.0.1:3000 -e VUS=64 -e DURATION=30s -e RAMP_UP=5s \
+            -e TOKENS=seed/tokens.json bench/load.js
+          echo '--- k6 summary ---'
+          jq '{rps:.metrics.http_reqs.values.rate, p95:.metrics.http_req_duration.values["p(95)"], p99:.metrics.http_req_duration.values["p(99)"], failed:.metrics.http_req_failed.values.rate}' /tmp/summary.json
+          echo '--- server log ---'
+          cat /tmp/server.log
