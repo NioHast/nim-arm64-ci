@@ -8,8 +8,13 @@ permissions:
 
 jobs:
   arm64:
+    name: ARM64 PGO=${{ matrix.pgo }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        pgo: ["0", "1"]
     steps:
       - name: Check out submission branch
         uses: actions/checkout@v4
@@ -30,5 +35,5 @@ jobs:
         run: bash test/run.sh submissions/nim-io_uring-NioHast
         working-directory: repo
         env:
-          PGO: "0"
+          PGO: ${{ matrix.pgo }}
           BUILD_VARIANT: danger
