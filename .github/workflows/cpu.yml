@@ -1,0 +1,31 @@
+name: Runner CPU topology
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu:
+    name: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: CPU model and topology
+        run: |
+          uname -a
+          nproc
+          lscpu
+          echo '--- cpu0 siblings ---'
+          cat /sys/devices/system/cpu/cpu0/topology/thread_siblings_list
+          echo '--- online ---'
+          cat /sys/devices/system/cpu/online
