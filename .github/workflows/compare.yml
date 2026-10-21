@@ -1,0 +1,169 @@
+name: Compare x86_64 and ARM64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            k6_asset: k6-v2.3.0-linux-amd64.tar.gz
+            k6_dir: k6-v2.3.0-linux-amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            k6_asset: k6-v2.3.0-linux-arm64.tar.gz
+            k6_dir: k6-v2.3.0-linux-arm64
+    steps:
+      - name: Check out submission branch
+        uses: actions/checkout@v4
+        with:
+          repository: NioHast/twelve-dollar-server-challenge
+          ref: arm64-port
+          path: repo
+      - name: Host architecture
+        run: uname -a
+      - name: Install tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3 jq curl openssl
+      - name: Install Nim
+        run: sudo bash repo/submissions/nim-io_uring-NioHast/install.sh
+      - name: Generate seed database and build
+        run: |
+          bash seed/make-seed.sh
+          bash submissions/nim-io_uring-NioHast/build.sh
+        working-directory: repo
+      - name: Install k6
+        run: |
+          curl -fsSL -o /tmp/k6.tgz "https://github.com/grafana/k6/releases/download/v2.3.0/${{ matrix.k6_asset }}"
+          tar -xzf /tmp/k6.tgz -C /tmp
+          sudo install "/tmp/${{ matrix.k6_dir }}/k6" /usr/local/bin/k6
+      - name: Official-style 20k-VU hold
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          mkdir -p bench-db
+          cp seed/feed.db bench-db/feed.db
+          rm -f bench-db/feed.db-wal bench-db/feed.db-shm
+          docker rm -f nim-bench >/dev/null 2>&1 || true
+          docker run -d --name nim-bench --network host \
+            --cpuset-cpus=0 --cpus=1 --memory=2g --memory-swap=2g \
+            --ulimit nofile=65535:65535 --security-opt seccomp=unconfined \
+            -v "$PWD":/work -w /work \
+            -e SQLITE_PATH=/work/bench-db/feed.db \
+            -e JWT_SECRET=twelve-dollar-challenge \
+            -e HOST=127.0.0.1 -e PORT=3000 \
+            -e IOURING_BUFS=256 -e ZEROCOPY_STATS=0 \
+            ubuntu:24.04 submissions/nim-io_uring-NioHast/bin/server
+          trap 'docker rm -f nim-bench >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 90); do
+            curl -sf http://127.0.0.1:3000/health >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:3000/health >/dev/null
+          set +e
+          taskset -c 1-3 k6 run --summary-export /tmp/official-summary.json \
+            -e BASE_URL=http://127.0.0.1:3000 \
+            -e VUS=20000 -e DURATION=2m -e RAMP_UP=15s \
+            -e TOKENS=../seed/tokens.json \
+            bench/load.js | tee /tmp/official.log
+          official_rc=${PIPESTATUS[0]}
+          set -e
+          echo "official_k6_exit=$official_rc"
+          grep -E 'http_reqs|http_req_duration|http_req_failed|checks_total|checks_succeeded' /tmp/official.log || true
+          echo '--- official server log ---'
+          docker logs nim-bench 2>&1 || true
+          docker rm -f nim-bench >/dev/null 2>&1 || true
+          trap - EXIT
+      - name: Saturation 64-VU mixed run
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          cat > bench/mixed-nowait.js <<'EOF'
+          import http from 'k6/http';
+          import { check } from 'k6';
+          import { SharedArray } from 'k6/data';
+
+          const BASE_URL = __ENV.BASE_URL || 'http://127.0.0.1:3000';
+          const tokens = new SharedArray('tokens', () => JSON.parse(open(__ENV.TOKENS)));
+
+          export const options = {
+            vus: 64,
+            duration: '30s',
+            thresholds: {
+              http_req_duration: ['p(95)<500', 'p(99)<1000'],
+              http_req_failed: ['rate<0.01'],
+            },
+            summaryTrendStats: ['avg', 'med', 'p(95)', 'p(99)', 'max'],
+          };
+
+          export default function () {
+            const user = tokens[(__VU - 1) % tokens.length];
+            const auth = {
+              headers: {
+                Authorization: `Bearer ${user.token}`,
+                'Content-Type': 'application/json',
+              },
+            };
+            const feed = http.get(`${BASE_URL}/feed`);
+            if (!check(feed, { 'feed 200': (r) => r.status === 200 })) return;
+            const posts = feed.json('posts');
+            if (!posts || posts.length === 0) return;
+            const post = posts[Math.floor(Math.random() * posts.length)];
+            check(http.get(`${BASE_URL}/posts/${post.id}`), {
+              'post 200': (r) => r.status === 200,
+            });
+            if (Math.random() < 0.15) {
+              check(http.post(`${BASE_URL}/posts/${post.id}/like`, null, auth), {
+                'like 200/201': (r) => r.status === 200 || r.status === 201,
+              });
+            }
+            if (Math.random() < 0.02) {
+              const body = JSON.stringify({
+                body: `${user.username} says hi at ${new Date().toISOString()}`,
+              });
+              check(http.post(`${BASE_URL}/posts`, body, auth), {
+                'create 201': (r) => r.status === 201,
+              });
+            }
+          }
+          EOF
+          rm -f bench-db/feed.db bench-db/feed.db-wal bench-db/feed.db-shm
+          cp seed/feed.db bench-db/feed.db
+          docker rm -f nim-bench >/dev/null 2>&1 || true
+          docker run -d --name nim-bench --network host \
+            --cpuset-cpus=0 --cpus=1 --memory=2g --memory-swap=2g \
+            --ulimit nofile=65535:65535 --security-opt seccomp=unconfined \
+            -v "$PWD":/work -w /work \
+            -e SQLITE_PATH=/work/bench-db/feed.db \
+            -e JWT_SECRET=twelve-dollar-challenge \
+            -e HOST=127.0.0.1 -e PORT=3000 \
+            -e IOURING_BUFS=256 -e ZEROCOPY_STATS=0 \
+            ubuntu:24.04 submissions/nim-io_uring-NioHast/bin/server
+          trap 'docker rm -f nim-bench >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 90); do
+            curl -sf http://127.0.0.1:3000/health >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:3000/health >/dev/null
+          set +e
+          taskset -c 1-3 k6 run --summary-export /tmp/sat-summary.json \
+            -e BASE_URL=http://127.0.0.1:3000 \
+            -e TOKENS=../seed/tokens.json \
+            bench/mixed-nowait.js | tee /tmp/sat.log
+          sat_rc=${PIPESTATUS[0]}
+          set -e
+          echo "sat_k6_exit=$sat_rc"
+          grep -E 'http_reqs|http_req_duration|http_req_failed|checks_total|checks_succeeded' /tmp/sat.log || true
+          echo '--- saturation server log ---'
+          docker logs nim-bench 2>&1 || true
+          docker rm -f nim-bench >/dev/null 2>&1 || true
+          trap - EXIT
