@@ -34,6 +34,7 @@ jobs:
           tar -xzf /tmp/k6.tgz -C /tmp
           sudo install /tmp/k6-v2.3.0-linux-arm64/k6 /usr/local/bin/k6
       - name: Run 64-VU mixed workload on one server CPU
+        working-directory: repo
         run: |
           set -euo pipefail
           cp seed/feed.db /tmp/bench.db
