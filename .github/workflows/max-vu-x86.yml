@@ -67,4 +67,5 @@ jobs:
         env:
           SERVER_CMD: ${{ matrix.server_cmd }}
           LOADGEN_CPUS: "2-3"
+          NIM_RINGS: "4"
         run: bash ../ci/search.sh
