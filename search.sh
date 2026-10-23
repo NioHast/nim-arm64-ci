@@ -52,7 +52,8 @@ run_level() {
   start_ns=$(date +%s%N)
 
   ulimit -n 1000000 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
-  timeout 420 taskset -c "$LOADGEN_CPUS" /tmp/loadgen -H 127.0.0.1 -p 3000 \
+  timeout 420 sudo prlimit --nofile=1000000:1000000 taskset -c "$LOADGEN_CPUS" \
+    /tmp/loadgen -H 127.0.0.1 -p 3000 \
     -c "$n" -d 360 -t 9000 -m mixed -T "$PWD/seed/tokens.json" >"$log" 2>&1
   local rc=$?
 
