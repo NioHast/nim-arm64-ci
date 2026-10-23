@@ -4,7 +4,7 @@
  * Why this exists: on a 4 vCPU / 3.9 GB WSL box a co-located k6 becomes the
  * bottleneck long before the server does. This generator keeps the hot path
  * malloc-free, uses one epoll loop, and opens keep-alive connections from
- * several loopback source addresses (127.0.0.2 .. 127.0.0.9) so that the
+ * several loopback source addresses (127.0.0.2 .. 127.0.0.65) so that the
  * local ephemeral-port range (~28k ports per IP) is not a hard ceiling.
  *
  * Design:
@@ -47,7 +47,7 @@
 #define INBUF_SIZE 8192u
 #define REQ_CAP 512
 #define MAX_EVENTS 1024
-#define SRC_IP_COUNT 8
+#define SRC_IP_COUNT 64
 /* tcp_max_syn_backlog is only 256 on this box; staying well below it
  * avoids SYN-queue overflow/SYN-cookie retransmits during the ramp. */
 #define CONNECT_INFLIGHT_MAX 128
