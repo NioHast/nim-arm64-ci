@@ -1,0 +1,55 @@
+name: Debug Nim 262k rings
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    name: rings-${{ matrix.rings }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        rings: [4, 5]
+    steps:
+      - name: Check out submission
+        uses: actions/checkout@v4
+        with:
+          repository: NioHast/twelve-dollar-server-challenge
+          ref: nim-opt
+          path: repo
+      - name: Check out benchmark helper
+        uses: actions/checkout@v4
+        with:
+          repository: NioHast/nim-arm64-ci
+          ref: main
+          path: ci
+      - name: Install tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3 jq curl openssl build-essential
+      - name: Raise connection limits
+        run: |
+          sudo modprobe nf_conntrack 2>/dev/null || true
+          sudo sysctl -w net.netfilter.nf_conntrack_max=1048576 || true
+          sudo sysctl -w net.core.somaxconn=65535 || true
+          sudo sysctl -w net.ipv4.ip_local_port_range="10000 65535" || true
+          cat /proc/sys/net/netfilter/nf_conntrack_max
+      - name: Install runtime
+        run: sudo bash repo/submissions/nim-io_uring-NioHast/install.sh
+      - name: Seed and build
+        run: |
+          bash seed/make-seed.sh
+          bash submissions/nim-io_uring-NioHast/build.sh
+          gcc -O2 -pthread -o /tmp/loadgen ../ci/loadgen.c
+        working-directory: repo
+      - name: Run 262k
+        working-directory: repo
+        env:
+          SERVER_CMD: submissions/nim-io_uring-NioHast/bin/server
+          LOADGEN_CPUS: "2-3"
+          NIM_RINGS: ${{ matrix.rings }}
+          LEVELS: "262000"
+        run: bash ../ci/levels.sh

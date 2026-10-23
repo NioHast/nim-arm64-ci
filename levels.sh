@@ -119,6 +119,7 @@ run_level() {
   awk -v v="$p95" 'BEGIN{exit !(v < 500)}' || pass=0
   awk -v v="$p99" 'BEGIN{exit !(v < 1000)}' || pass=0
 
+  echo "DOCKER_STATE $(docker inspect -f '{{.State.OOMKilled}} {{.State.ExitCode}} {{.State.Error}}' bench 2>&1 || true)"
   echo "LEVEL_RESULT n=$n rc=$rc connected=$connected completed=$completed errors=$errors error_rate_pct=$error_rate_pct rps=$rps p50=$p50 p95=$p95 p99=$p99 cpu_total_pct=$cpu_pct cpu_app_user_pct=$user_pct sys_cpu_pct=$sys_pct rss_mib=$rss_mib hwm_mib=$hwm_mib mem_current_mib=$mem_current_mib mem_peak_mib=$mem_peak_mib tcp_inuse=$tcp_inuse pass=$pass"
   tail -12 "$log" || true
   if [ "$pass" -ne 1 ]; then
