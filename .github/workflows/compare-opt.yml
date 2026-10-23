@@ -1,0 +1,71 @@
+name: Optimized Nim vs Rust v3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: ${{ matrix.impl }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - impl: nim-opt
+            repo: NioHast/twelve-dollar-server-challenge
+            ref: nim-opt
+            subdir: submissions/nim-io_uring-NioHast
+            server_cmd: submissions/nim-io_uring-NioHast/bin/server
+          - impl: rust-v3
+            repo: arjaythedev/twelve-dollar-server-challenge
+            ref: refs/pull/141/head
+            subdir: submissions/rust-epoll-scooter1337
+            server_cmd: bash submissions/rust-epoll-scooter1337/start.sh
+    steps:
+      - name: Check out submission
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.ref }}
+          path: repo
+      - name: Check out benchmark helper
+        uses: actions/checkout@v4
+        with:
+          repository: NioHast/nim-arm64-ci
+          ref: main
+          path: ci
+      - name: Host
+        run: uname -a
+      - name: Install tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3 jq curl openssl build-essential
+      - name: Raise kernel connection limits
+        run: |
+          sudo modprobe nf_conntrack 2>/dev/null || true
+          sudo sysctl -w net.netfilter.nf_conntrack_max=1048576 || true
+          sudo sysctl -w net.core.somaxconn=65535 || true
+          sudo sysctl -w net.ipv4.ip_local_port_range="10000 65535" || true
+          echo "conntrack_max=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo unavailable)"
+          echo "somaxconn=$(cat /proc/sys/net/core/somaxconn 2>/dev/null || echo unavailable)"
+          echo "conntrack_count=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo unavailable)"
+      - name: Install runtime
+        run: sudo bash "repo/${{ matrix.subdir }}/install.sh"
+      - name: Generate seed database
+        run: bash seed/make-seed.sh
+        working-directory: repo
+      - name: Build submission and load generator
+        run: |
+          bash "${{ matrix.subdir }}/build.sh"
+          gcc -O2 -pthread -o /tmp/loadgen ../ci/loadgen.c
+        working-directory: repo
+      - name: Test 262k, 300k, 327k
+        working-directory: repo
+        env:
+          SERVER_CMD: ${{ matrix.server_cmd }}
+          LOADGEN_CPUS: "2-3"
+          NIM_RINGS: "5"
+          LEVELS: "262000 300000 327675"
+        run: bash ../ci/levels.sh
