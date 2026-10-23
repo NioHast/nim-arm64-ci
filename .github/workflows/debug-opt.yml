@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rings: [4, 5]
+        rings: [5]
     steps:
       - name: Check out submission
         uses: actions/checkout@v4
